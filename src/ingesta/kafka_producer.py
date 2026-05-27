@@ -34,7 +34,7 @@ KAFKA_CONFIG = {
     "acks": "all",                  # Confirmación de todos los réplicas (durabilidad máxima)
     "retries": 5,
     "retry.backoff.ms": 300,
-    "enable.idempotence": True,     # Exactamente una entrega (no duplicados)
+    "enable.idempotence": True,     # Exactamente una entrega, no se duplica.
     "compression.type": "snappy",
     "linger.ms": 5,
     "batch.size": 65536,
@@ -162,9 +162,7 @@ class ProductorAuditoria:
         self.flush()
 
 
-# ---------------------------------------------------------------------------
-# Ejemplo de uso / smoke test
-# ---------------------------------------------------------------------------
+# 2. Ejemplo de uso 
 if __name__ == "__main__":
     transaccion_ejemplo = {
         "cuenta_id": "CTA-001234",

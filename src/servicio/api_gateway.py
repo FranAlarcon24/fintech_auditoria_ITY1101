@@ -1,16 +1,16 @@
+
 """
 Capa de servicio (Serving Layer) - Arquitectura Lambda
 API Gateway REST con FastAPI para consultas sobre la vista maestra y eventos de auditoría.
 Expone endpoints de solo lectura sobre PostgreSQL (resultados batch) y Delta Lake.
 """
 
-from __future__ import annotations
-
+import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
-from typing import Annotated, AsyncGenerator, Optional
+from datetime import date, datetime
+from typing import Annotated, Optional
 
 import asyncpg
 from dotenv import load_dotenv
@@ -33,10 +33,7 @@ DATABASE_URL = os.getenv(
 )
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "cambia_esto_en_produccion")
 
-
-# ---------------------------------------------------------------------------
-# Pool de conexiones PostgreSQL
-# ---------------------------------------------------------------------------
+# 1. Pool de conexiones PostgreSQL
 _pool: Optional[asyncpg.Pool] = None
 
 
@@ -49,11 +46,10 @@ async def obtener_pool() -> asyncpg.Pool:
             max_size=10,
             command_timeout=30,
         )
-    assert _pool is not None
     return _pool
 
 
-async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
+async def get_db() -> asyncpg.Connection:
     pool = await obtener_pool()
     async with pool.acquire() as conn:
         yield conn
@@ -61,12 +57,9 @@ async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
 
 DBConn = Annotated[asyncpg.Connection, Depends(get_db)]
 
-
-# ---------------------------------------------------------------------------
-# Ciclo de vida de la aplicación
-# ---------------------------------------------------------------------------
+# 2. Ciclo de vida de la aplicación
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(app: FastAPI):
     await obtener_pool()
     logger.info("API Gateway iniciado — pool PostgreSQL listo.")
     yield
@@ -91,10 +84,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ---------------------------------------------------------------------------
-# Modelos de respuesta
-# ---------------------------------------------------------------------------
+# 3. Modelos de respuesta
 class TransaccionResumen(BaseModel):
     event_id: str
     cuenta_id: str
@@ -128,17 +118,14 @@ class EstadisticasCuenta(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_ok: bool
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-
-# ---------------------------------------------------------------------------
-# Middleware de auditoría de accesos
-# ---------------------------------------------------------------------------
+# 4. Middleware de auditoría de accesos
 @app.middleware("http")
 async def registrar_acceso(request: Request, call_next):
-    inicio = datetime.now(timezone.utc)
+    inicio = datetime.utcnow()
     response = await call_next(request)
-    duracion_ms = (datetime.now(timezone.utc) - inicio).total_seconds() * 1000
+    duracion_ms = (datetime.utcnow() - inicio).total_seconds() * 1000
     logger.info(
         "ACCESS [%s] %s %s → %d (%.1fms)",
         request.client.host if request.client else "unknown",
@@ -149,10 +136,7 @@ async def registrar_acceso(request: Request, call_next):
     )
     return response
 
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+# 5.Endpoints
 @app.get("/health", response_model=HealthResponse, tags=["Sistema"])
 async def health_check(db: DBConn):
     try:
@@ -182,7 +166,7 @@ async def listar_transacciones(
         idx += 1
     if desde:
         condiciones.append(f"timestamp_utc >= ${idx}")
-        params.append(datetime.combine(desde, datetime.min.time()).replace(tzinfo=timezone.utc))
+        params.append(datetime.combine(desde, datetime.min.time()))
         idx += 1
     if hasta:
         condiciones.append(f"timestamp_utc < ${idx}::date + interval '1 day'")
@@ -249,11 +233,11 @@ async def listar_reportes(
     idx = 1
 
     if anio:
-        condiciones.append(f"anio = ${idx}")
+        condiciones.append(f"EXTRACT(YEAR  FROM generado_en) = ${idx}")
         params.append(anio)
         idx += 1
     if mes:
-        condiciones.append(f"mes = ${idx}")
+        condiciones.append(f"EXTRACT(MONTH FROM generado_en) = ${idx}")
         params.append(mes)
         idx += 1
 
@@ -286,19 +270,19 @@ async def listar_alertas(
     resuelta: Optional[bool] = Query(None),
     limite: int = Query(50, ge=1, le=500),
 ):
-    base = """SELECT alerta_id, tipo_alerta, descripcion, event_id,
-                     creada_en, resuelta, resuelta_en
-              FROM auditoria.alertas_regulatorias"""
-    if resuelta is None:
-        filas = await db.fetch(f"{base} ORDER BY creada_en DESC LIMIT $1", limite)
-    else:
-        filas = await db.fetch(f"{base} WHERE resuelta = $1 ORDER BY creada_en DESC LIMIT $2", resuelta, limite)
+    condicion = "" if resuelta is None else f"WHERE resuelta = {str(resuelta).upper()}"
+    filas = await db.fetch(
+        f"""SELECT alerta_id, tipo_alerta, descripcion, event_id,
+                   creada_en, resuelta, resuelta_en
+            FROM auditoria.alertas_regulatorias
+            {condicion}
+            ORDER BY creada_en DESC
+            LIMIT $1""",
+        limite,
+    )
     return [dict(f) for f in filas]
 
-
-# ---------------------------------------------------------------------------
-# Manejadores de error globales
-# ---------------------------------------------------------------------------
+# 6. Manejadores de error globales
 @app.exception_handler(Exception)
 async def manejador_error_generico(request: Request, exc: Exception):
     logger.exception("Error no controlado en %s: %s", request.url.path, exc)

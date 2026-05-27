@@ -11,10 +11,7 @@ CREATE SCHEMA IF NOT EXISTS auditoria;
 
 SET search_path TO auditoria, public;
 
--- TABLA: transacciones.
--- Registro inmutable de cada transacción financiera procesada.
--- Solo se permite INSERT. UPDATE y DELETE están bloqueados por trigger.
-
+-- 1° Transacciones.
 CREATE TABLE IF NOT EXISTS auditoria.transacciones (
     id                          BIGSERIAL       PRIMARY KEY,
     event_id                    UUID            NOT NULL UNIQUE DEFAULT uuid_generate_v4(),
@@ -54,7 +51,7 @@ CREATE TABLE IF NOT EXISTS auditoria.transacciones (
     CONSTRAINT chk_hash_formato CHECK (hash_integridad ~ '^[a-f0-9]{64}$')
 );
 
--- Índices para consultas regulatorias y de auditoría
+-- Índices para consultas regulatorias y de auditoría.
 CREATE INDEX IF NOT EXISTS idx_tx_cuenta_id  ON auditoria.transacciones (cuenta_id);
 CREATE INDEX IF NOT EXISTS idx_tx_timestamp  ON auditoria.transacciones (timestamp_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_tx_periodo    ON auditoria.transacciones (anio, mes);
@@ -62,11 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_tx_cmf        ON auditoria.transacciones (requier
 CREATE INDEX IF NOT EXISTS idx_tx_hash       ON auditoria.transacciones (hash_integridad);
 CREATE INDEX IF NOT EXISTS idx_tx_tipo       ON auditoria.transacciones (tipo);
 
-
--- =============================================================================
 -- TABLA: reportes_regulatorios
 -- Cada reporte mensual se sella con SHA-256 y es inmutable.
--- =============================================================================
 CREATE TABLE IF NOT EXISTS auditoria.reportes_regulatorios (
     id                              BIGSERIAL       PRIMARY KEY,
     reporte_id                      UUID            NOT NULL UNIQUE DEFAULT uuid_generate_v4(),
@@ -106,9 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_rep_periodo ON auditoria.reportes_regulatorios (p
 CREATE INDEX IF NOT EXISTS idx_rep_estado  ON auditoria.reportes_regulatorios (estado);
 
 
--- =============================================================================
 -- TABLA: alertas_regulatorias
--- =============================================================================
 CREATE TABLE IF NOT EXISTS auditoria.alertas_regulatorias (
     id              BIGSERIAL       PRIMARY KEY,
     alerta_id       UUID            NOT NULL UNIQUE DEFAULT uuid_generate_v4(),
@@ -129,11 +121,8 @@ CREATE INDEX IF NOT EXISTS idx_alerta_tipo     ON auditoria.alertas_regulatorias
 CREATE INDEX IF NOT EXISTS idx_alerta_resuelta ON auditoria.alertas_regulatorias (resuelta) WHERE resuelta = FALSE;
 CREATE INDEX IF NOT EXISTS idx_alerta_cuenta   ON auditoria.alertas_regulatorias (cuenta_id);
 
-
--- =============================================================================
 -- TABLA: log_sistema
 -- Registro de accesos y operaciones del sistema.
--- =============================================================================
 CREATE TABLE IF NOT EXISTS auditoria.log_sistema (
     id              BIGSERIAL       PRIMARY KEY,
     log_id          UUID            NOT NULL DEFAULT uuid_generate_v4(),
@@ -154,11 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_log_timestamp ON auditoria.log_sistema (timestamp
 CREATE INDEX IF NOT EXISTS idx_log_accion    ON auditoria.log_sistema (accion);
 
 
--- =============================================================================
 -- TRIGGER: poblar anio/mes automáticamente en cada INSERT
--- EXTRACT sobre TIMESTAMPTZ es STABLE (no IMMUTABLE), por lo que no puede
--- usarse en columnas generadas; un trigger BEFORE INSERT es la alternativa.
--- =============================================================================
 CREATE OR REPLACE FUNCTION auditoria.fn_set_periodo()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -172,10 +157,7 @@ CREATE OR REPLACE TRIGGER trg_tx_set_periodo
     BEFORE INSERT ON auditoria.transacciones
     FOR EACH ROW EXECUTE FUNCTION auditoria.fn_set_periodo();
 
-
--- =============================================================================
 -- TRIGGERS: inmutabilidad — bloquear UPDATE y DELETE en tablas críticas
--- =============================================================================
 CREATE OR REPLACE FUNCTION auditoria.fn_bloquear_modificacion()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
@@ -203,9 +185,7 @@ CREATE OR REPLACE TRIGGER trg_rep_no_delete
     FOR EACH ROW EXECUTE FUNCTION auditoria.fn_bloquear_modificacion();
 
 
--- =============================================================================
--- FUNCIÓN: verificar integridad SHA-256 de un reporte
--- =============================================================================
+-- FUNCTION: Verifica la integridad SHA-256 de un reporte
 CREATE OR REPLACE FUNCTION auditoria.verificar_reporte(p_reporte_id UUID)
 RETURNS TABLE (
     reporte_id  UUID,
@@ -248,10 +228,7 @@ BEGIN
 END;
 $$;
 
-
--- =============================================================================
 -- Roles y permisos mínimos (principio de mínimo privilegio)
--- =============================================================================
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'auditoria_writer') THEN
@@ -271,9 +248,7 @@ GRANT SELECT                  ON ALL TABLES IN SCHEMA auditoria       TO auditor
 GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA auditoria    TO auditoria_writer;
 
 
--- =============================================================================
 -- Datos de ejemplo para pruebas
--- =============================================================================
 INSERT INTO auditoria.transacciones (
     event_id, cuenta_id, monto, monto_clp, moneda, tipo, canal,
     timestamp_utc, hash_integridad, hash_valido, requiere_reporte_cmf, es_alta_valor

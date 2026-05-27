@@ -1,13 +1,6 @@
-# =============================================================================
-# FinTech Auditoría — Docker Compose
-# Arquitectura Lambda: Kafka (speed layer) + Spark/Delta (batch layer) + API
-# =============================================================================
-
 services:
 
-  # ---------------------------------------------------------------------------
   # Zookeeper — coordinación de clúster Kafka
-  # ---------------------------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.7.1
     container_name: auditoria_zookeeper
@@ -25,9 +18,7 @@ services:
     networks:
       - auditoria_net
 
-  # ---------------------------------------------------------------------------
   # Kafka — capa de velocidad (speed layer)
-  # ---------------------------------------------------------------------------
   kafka:
     image: confluentinc/cp-kafka:7.7.1
     container_name: auditoria_kafka
@@ -56,9 +47,7 @@ services:
     networks:
       - auditoria_net
 
-  # ---------------------------------------------------------------------------
   # PostgreSQL — capa de servicio y reportes regulatorios
-  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: auditoria_postgres
@@ -79,9 +68,7 @@ services:
     networks:
       - auditoria_net
 
-  # ---------------------------------------------------------------------------
   # Productor Kafka — ingesta de transacciones
-  # ---------------------------------------------------------------------------
   ingesta:
     build:
       context: .
@@ -99,13 +86,19 @@ services:
       - auditoria_net
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
   # Spark Batch — transformaciones y escritura en Delta Lake
-  # ---------------------------------------------------------------------------
+  # El conector spark-sql-kafka-0-10_2.12-3.5.3 está pre-instalado en la imagen
+  # (junto con kafka-clients y commons-pool2) dentro de $SPARK_HOME/jars, por lo
+  # que Spark lo carga automáticamente sin necesidad de --packages en runtime.
   spark_batch:
     build:
       context: .
       target: batch
+      args:
+        SPARK_VERSION: "3.5.3"
+        SCALA_VERSION: "2.12"
+        KAFKA_CLIENTS_VERSION: "3.4.1"
+        COMMONS_POOL2_VERSION: "2.11.1"
     container_name: auditoria_spark_batch
     depends_on:
       kafka:
@@ -115,16 +108,19 @@ services:
     env_file: .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # Caché Ivy persistente: evita que configure_spark_with_delta_pip
+      # re-descargue los JARs de Delta Lake en cada arranque del contenedor
+      SPARK_EXTRA_CLASSPATH: ""          # placeholder; JARs ya están en SPARK_HOME/jars
+      IVY_HOME: /root/.ivy2
     volumes:
       - ./src/batch:/app/src/batch:ro
       - delta_data:/data/delta
+      - ivy_cache:/root/.ivy2            # caché Maven/Ivy persistente entre reinicios
     networks:
       - auditoria_net
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
   # API Gateway — capa de servicio REST
-  # ---------------------------------------------------------------------------
   api:
     build:
       context: .
@@ -149,9 +145,7 @@ services:
       - auditoria_net
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
   # Generador de reportes — ejecución programada (cron-like)
-  # ---------------------------------------------------------------------------
   reportes:
     build:
       context: .
@@ -170,9 +164,7 @@ services:
       - auditoria_net
     restart: "no"       # Se ejecuta bajo demanda o mediante scheduler externo
 
-# =============================================================================
 # Redes y volúmenes
-# =============================================================================
 networks:
   auditoria_net:
     driver: bridge
@@ -185,3 +177,4 @@ volumes:
   postgres_data:
   delta_data:
   reportes_data:
+  ivy_cache:       # caché Maven/Ivy para JARs de Delta Lake (spark_batch)

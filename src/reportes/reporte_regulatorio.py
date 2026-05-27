@@ -31,9 +31,8 @@ DATABASE_URL   = os.getenv("DATABASE_URL", "postgresql://auditoria_user:auditori
 REPORTES_PATH  = Path(os.getenv("REPORTES_OUTPUT_PATH", "/data/reportes"))
 
 
-# ---------------------------------------------------------------------------
-# Estructuras de datos
-# ---------------------------------------------------------------------------
+
+# 1. Estructuras de datos
 @dataclass
 class ResumenTransaccion:
     tipo: str
@@ -56,14 +55,14 @@ class AlertaCMF:
 @dataclass
 class ReporteRegulatorio:
     reporte_id: str
-    periodo: str                          # "YYYY-MM"
+    periodo: str                       
     anio: int
     mes: int
     fecha_generacion_utc: str
     total_transacciones: int
     monto_total_clp: float
     monto_promedio_clp: float
-    transacciones_alta_valor: int         # ≥ 10M CLP
+    transacciones_alta_valor: int        
     transacciones_reportables_cmf: int
     resumen_por_tipo: list[ResumenTransaccion]
     alertas: list[AlertaCMF]
@@ -90,9 +89,7 @@ class ReporteRegulatorio:
         return self.hash_reporte == self.calcular_hash()
 
 
-# ---------------------------------------------------------------------------
-# Generador principal
-# ---------------------------------------------------------------------------
+# 2. Generador principal
 class GeneradorReporteRegulatorio:
     """
     Genera reportes regulatorios mensuales desde PostgreSQL.
@@ -104,9 +101,7 @@ class GeneradorReporteRegulatorio:
         self._conn.autocommit = False
         REPORTES_PATH.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # Consultas a PostgreSQL
-    # ------------------------------------------------------------------
+    # 2.1. Consultas a PostgreSQL
     def _totales_periodo(self, anio: int, mes: int) -> dict:
         with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -181,9 +176,7 @@ class GeneradorReporteRegulatorio:
             )
             return [AlertaCMF(**dict(f)) for f in cur.fetchall()]
 
-    # ------------------------------------------------------------------
-    # Construcción y sellado del reporte
-    # ------------------------------------------------------------------
+    # 2.2. Construcción y sellado del reporte
     def generar(self, anio: int, mes: int) -> ReporteRegulatorio:
         logger.info("Generando reporte regulatorio %04d-%02d ...", anio, mes)
 
@@ -214,9 +207,7 @@ class GeneradorReporteRegulatorio:
         )
         return reporte
 
-    # ------------------------------------------------------------------
-    # Persistencia (ACID — transacción única)
-    # ------------------------------------------------------------------
+    # 2.3. Persistencia (ACID — transacción única)
     def persistir(self, reporte: ReporteRegulatorio):
         """
         Persiste el reporte en PostgreSQL dentro de una única transacción ACID.
@@ -224,7 +215,7 @@ class GeneradorReporteRegulatorio:
         """
         try:
             with self._conn.cursor() as cur:
-                # Validar que no exista ya un reporte para el mismo período
+                # Valida que ya no exista un reporte para el mismo período.
                 cur.execute(
                     "SELECT 1 FROM auditoria.reportes_regulatorios WHERE periodo = %s",
                     (reporte.periodo,),
@@ -266,9 +257,7 @@ class GeneradorReporteRegulatorio:
             self._conn.rollback()
             raise
 
-    # ------------------------------------------------------------------
-    # Exportación a archivos
-    # ------------------------------------------------------------------
+    # 2.4. Exportación a archivos
     def exportar_json(self, reporte: ReporteRegulatorio) -> Path:
         ruta = REPORTES_PATH / f"reporte_{reporte.periodo}_{reporte.reporte_id[:8]}.json"
         with open(ruta, "w", encoding="utf-8") as f:
@@ -291,9 +280,7 @@ class GeneradorReporteRegulatorio:
             self._conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Punto de entrada
-# ---------------------------------------------------------------------------
+# 3. Punto de entrada
 def generar_reporte_periodo(anio: int, mes: int) -> ReporteRegulatorio:
     generador = GeneradorReporteRegulatorio()
     reporte = generador.generar(anio, mes)

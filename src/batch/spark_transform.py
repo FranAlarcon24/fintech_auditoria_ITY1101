@@ -70,9 +70,7 @@ def crear_sesion_spark() -> SparkSession:
     return configure_spark_with_delta_pip(builder).getOrCreate()
 
 
-# ---------------------------------------------------------------------------
-# UDF: verificación de integridad SHA-256
-# ---------------------------------------------------------------------------
+# 1. UDF: Verifica la integridad de SHA-256.
 def _verificar_hash(payload_json: str, hash_esperado: str) -> bool:
     """Recomputa el SHA-256 del payload y lo compara con el hash almacenado."""
     try:
@@ -85,10 +83,7 @@ def _verificar_hash(payload_json: str, hash_esperado: str) -> bool:
         return False
 
 
-
-# ---------------------------------------------------------------------------
-# Lectura desde Kafka (streaming → micro-batch)
-# ---------------------------------------------------------------------------
+# 2. Lectura desde Kafka (streaming → micro-batch)
 def leer_desde_kafka(spark: SparkSession) -> DataFrame:
     return (
         spark.readStream
@@ -107,10 +102,7 @@ def leer_desde_kafka(spark: SparkSession) -> DataFrame:
         .select("kafka_offset", "kafka_partition", "kafka_ts", "msg.*")
     )
 
-
-# ---------------------------------------------------------------------------
-# Transformaciones de calidad y enriquecimiento
-# ---------------------------------------------------------------------------
+# 3. Transformaciones de calidad y enriquecimiento
 def validar_integridad(df: DataFrame) -> DataFrame:
     """Marca registros cuyo hash SHA-256 no coincide (tampering detection)."""
     return df.withColumn(
@@ -145,9 +137,7 @@ def detectar_anomalias(df: DataFrame) -> DataFrame:
     )
 
 
-# ---------------------------------------------------------------------------
-# Escritura inmutable en Delta Lake (append-only, ACID)
-# ---------------------------------------------------------------------------
+# 4. Escritura inmutable en Delta Lake (append-only, ACID)
 def escribir_delta(df: DataFrame, tabla: str, partition_cols: list[str]):
     ruta = f"{DELTA_BASE_PATH}/{tabla}"
 
@@ -156,7 +146,7 @@ def escribir_delta(df: DataFrame, tabla: str, partition_cols: list[str]):
             return
         logger.info("Procesando micro-batch %d para tabla '%s'", batch_id, tabla)
 
-        # Rechazar registros con hash inválido antes de persistir
+        # 4.1. Rechazar registros con hash inválido antes de persistir
         validos   = batch_df.filter(F.col("hash_valido") == True)   # noqa: E712
         invalidos = batch_df.filter(F.col("hash_valido") == False)  # noqa: E712
 
@@ -169,7 +159,7 @@ def escribir_delta(df: DataFrame, tabla: str, partition_cols: list[str]):
                 f"{DELTA_BASE_PATH}/cuarentena/{tabla}"
             )
 
-        # Escritura ACID append-only (inmutabilidad garantizada por Delta)
+        # 4.2 Escritura ACID append-only (inmutabilidad garantizada por Delta)
         (
             validos.write
             .format("delta")
@@ -183,9 +173,7 @@ def escribir_delta(df: DataFrame, tabla: str, partition_cols: list[str]):
     return procesar_micro_batch
 
 
-# ---------------------------------------------------------------------------
-# Pipeline principal
-# ---------------------------------------------------------------------------
+#5.  Pipeline principal
 def ejecutar_pipeline():
     spark = crear_sesion_spark()
     spark.sparkContext.setLogLevel("WARN")
@@ -215,9 +203,7 @@ def ejecutar_pipeline():
     query.awaitTermination()
 
 
-# ---------------------------------------------------------------------------
-# Utilidades de mantenimiento Delta Lake
-# ---------------------------------------------------------------------------
+# 6. Utilidades de mantenimiento Delta Lake
 def vacuum_delta(spark: SparkSession, tabla: str, horas_retension: int = 168):
     """Elimina versiones antiguas manteniendo el historial de retención configurado."""
     ruta = f"{DELTA_BASE_PATH}/{tabla}"
