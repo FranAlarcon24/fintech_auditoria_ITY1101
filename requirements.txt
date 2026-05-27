@@ -1,0 +1,30 @@
+# =============================================================================
+# FinTech Auditoría — Dependencias Python
+# =============================================================================
+
+# --- Ingesta (Kafka) ----------------------------------------------------------
+confluent-kafka==2.5.3
+
+# --- Batch (Spark + Delta Lake) -----------------------------------------------
+pyspark==3.5.3
+delta-spark==3.2.0
+
+# --- API Gateway --------------------------------------------------------------
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+asyncpg==0.30.0
+pydantic==2.10.3
+
+# --- Reportes / Base de datos -------------------------------------------------
+psycopg2-binary==2.9.10
+
+# --- Utilidades generales -----------------------------------------------------
+python-dotenv==1.0.1
+
+# --- Calidad de código (desarrollo) -------------------------------------------
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1          # cliente HTTP para tests de FastAPI
+black==24.10.0
+ruff==0.8.3
+mypy==1.13.0

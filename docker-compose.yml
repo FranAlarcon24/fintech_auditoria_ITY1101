@@ -1,0 +1,187 @@
+# =============================================================================
+# FinTech Auditoría — Docker Compose
+# Arquitectura Lambda: Kafka (speed layer) + Spark/Delta (batch layer) + API
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Zookeeper — coordinación de clúster Kafka
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.1
+    container_name: auditoria_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT:-2181}
+      ZOOKEEPER_TICK_TIME:   ${ZOOKEEPER_TICK_TIME:-2000}
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auditoria_net
+
+  # ---------------------------------------------------------------------------
+  # Kafka — capa de velocidad (speed layer)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: auditoria_kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_CLIENT_PORT:-2181}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168         # 7 días de retención
+      KAFKA_LOG_RETENTION_BYTES: -1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 6
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - auditoria_net
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — capa de servicio y reportes regulatorios
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: auditoria_postgres
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-fintech_auditoria}
+      POSTGRES_USER:     ${POSTGRES_USER:-auditoria_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-auditoria_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auditoria_user} -d ${POSTGRES_DB:-fintech_auditoria}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - auditoria_net
+
+  # ---------------------------------------------------------------------------
+  # Productor Kafka — ingesta de transacciones
+  # ---------------------------------------------------------------------------
+  ingesta:
+    build:
+      context: .
+      target: ingesta
+    container_name: auditoria_ingesta
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    volumes:
+      - ./src/ingesta:/app/src/ingesta:ro
+    networks:
+      - auditoria_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Spark Batch — transformaciones y escritura en Delta Lake
+  # ---------------------------------------------------------------------------
+  spark_batch:
+    build:
+      context: .
+      target: batch
+    container_name: auditoria_spark_batch
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    volumes:
+      - ./src/batch:/app/src/batch:ro
+      - delta_data:/data/delta
+    networks:
+      - auditoria_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # API Gateway — capa de servicio REST
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: api
+    container_name: auditoria_api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-auditoria_user}:${POSTGRES_PASSWORD:-auditoria_pass}@postgres:5432/${POSTGRES_DB:-fintech_auditoria}
+    volumes:
+      - ./src/servicio:/app/src/servicio:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - auditoria_net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Generador de reportes — ejecución programada (cron-like)
+  # ---------------------------------------------------------------------------
+  reportes:
+    build:
+      context: .
+      target: reportes
+    container_name: auditoria_reportes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-auditoria_user}:${POSTGRES_PASSWORD:-auditoria_pass}@postgres:5432/${POSTGRES_DB:-fintech_auditoria}
+    volumes:
+      - ./src/reportes:/app/src/reportes:ro
+      - reportes_data:/data/reportes
+    networks:
+      - auditoria_net
+    restart: "no"       # Se ejecuta bajo demanda o mediante scheduler externo
+
+# =============================================================================
+# Redes y volúmenes
+# =============================================================================
+networks:
+  auditoria_net:
+    driver: bridge
+    name: auditoria_net
+
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
+  postgres_data:
+  delta_data:
+  reportes_data:
